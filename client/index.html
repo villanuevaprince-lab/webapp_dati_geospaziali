@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fontanelle Milano</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container">
+        <h1>Fontanelle Milano</h1>
+        <p class="subtitle">Mappa e API base per esplorare le vedovelle del Comune di Milano</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card controls-card">
+        <h2>Controlli</h2>
+        <form id="nil-search-form" class="controls-form">
+          <label for="nil-input">Cerca fontanelle per NIL</label>
+          <div class="controls-row">
+            <input
+              id="nil-input"
+              name="nil"
+              type="text"
+              placeholder="Es. CENTRALE"
+              autocomplete="off"
+            />
+            <button type="submit">Cerca</button>
+            <button id="load-stats-btn" type="button" class="secondary-btn">Carica statistiche NIL</button>
+            <button id="reset-map-btn" type="button" class="ghost-btn">Reset</button>
+          </div>
+        </form>
+        <p id="api-feedback" class="status pending">Pronto. Inserisci un NIL o carica le statistiche.</p>
+      </section>
+
+      <section class="card map-card">
+        <h2>Mappa</h2>
+        <div id="map" aria-label="Mappa delle fontanelle di Milano"></div>
+      </section>
+
+      <section class="split-grid">
+        <section class="card">
+          <h2>Risultati testuali</h2>
+          <ul id="results-list" class="results-list"></ul>
+        </section>
+
+        <section class="card">
+          <h2>Statistiche per NIL</h2>
+          <div class="table-wrapper">
+            <table id="stats-table" class="stats-table">
+              <thead>
+                <tr>
+                  <th>NIL</th>
+                  <th>Numero fontanelle</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>
