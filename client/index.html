@@ -22,14 +22,27 @@
 
     <main class="container">
       <section class="card controls-card">
-        <h2>Controlli</h2>
-        <form id="nil-search-form" class="controls-form">
-          <label for="nil-select">Seleziona NIL</label>
+        <h2>Ricerca fontanelle per NIL</h2>
+        <form id="nil-text-search-form" class="controls-form">
+          <label for="nil-input">Inserisci un NIL</label>
           <div class="controls-row">
-            <select id="nil-select" name="nil" aria-label="Seleziona un NIL">
+            <input
+              id="nil-input"
+              name="nil-text"
+              type="text"
+              placeholder="Es. Dergano"
+              aria-label="Inserisci un NIL"
+            />
+            <button type="submit">Visualizza da testo</button>
+          </div>
+        </form>
+        <form id="nil-select-search-form" class="controls-form">
+          <label for="nil-select">Scegli un NIL dalla dropdown</label>
+          <div class="controls-row">
+            <select id="nil-select" name="nil-select" aria-label="Seleziona un NIL dalla dropdown">
               <option value="">Seleziona un NIL...</option>
             </select>
-            <button type="submit">Cerca</button>
+            <button type="submit">Visualizza da dropdown</button>
             <button id="load-stats-btn" type="button" class="secondary-btn">Carica statistiche NIL</button>
             <button id="reset-map-btn" type="button" class="ghost-btn">Reset</button>
           </div>
@@ -54,9 +67,10 @@
               aria-label="Longitudine"
             />
             <button type="submit">Cerca entro 500 m</button>
+            <button id="near-me-btn" type="button" class="secondary-btn">Trova fontanelle vicino a me</button>
           </div>
         </form>
-        <p id="api-feedback" class="status pending">Pronto. Seleziona un NIL o carica le statistiche.</p>
+        <p id="api-feedback" class="status pending">Pronto. Cerca un NIL o usa latitudine/longitudine per la ricerca entro 500 m.</p>
       </section>
 
       <section class="card map-card">
@@ -72,16 +86,20 @@
         </section>
 
         <section class="card">
-          <h2>Statistiche per NIL</h2>
+          <h2>Statistiche fontanelle per NIL</h2>
           <div class="table-wrapper">
-            <table id="stats-table" class="stats-table">
+            <table id="stats-table" class="stats-table" aria-label="Tabella statistiche NIL">
               <thead>
                 <tr>
                   <th>NIL</th>
                   <th>Numero fontanelle</th>
                 </tr>
               </thead>
-              <tbody></tbody>
+              <tbody>
+                <tr>
+                  <td colspan="2">Premi "Carica statistiche NIL" per visualizzare i dati.</td>
+                </tr>
+              </tbody>
             </table>
           </div>
         </section>

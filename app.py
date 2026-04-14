@@ -384,8 +384,42 @@ def get_fountains_stats_by_nil():
     collection = get_fountains_collection()
 
     pipeline = [
-        {"$match": {"properties.NIL": {"$exists": True, "$ne": None}}},
-        {"$group": {"_id": "$properties.NIL", "count": {"$sum": 1}}},
+        {
+            "$project": {
+                "raw_nil": {
+                    "$ifNull": ["$nil", {"$ifNull": ["$properties.NIL", ""]}]
+                }
+            }
+        },
+        {
+            "$project": {
+                "nil": {
+                    "$trim": {
+                        "input": {
+                            "$convert": {
+                                "input": "$raw_nil",
+                                "to": "string",
+                                "onError": "",
+                                "onNull": "",
+                            }
+                        },
+                        "chars": " \t\n\r",
+                    }
+                }
+            }
+        },
+        {
+            "$project": {
+                "nil": {
+                    "$cond": [
+                        {"$eq": ["$nil", ""]},
+                        "Non specificato",
+                        "$nil",
+                    ]
+                }
+            }
+        },
+        {"$group": {"_id": "$nil", "count": {"$sum": 1}}},
         {"$project": {"_id": 0, "nil": "$_id", "count": 1}},
         {"$sort": {"count": -1, "nil": 1}},
     ]

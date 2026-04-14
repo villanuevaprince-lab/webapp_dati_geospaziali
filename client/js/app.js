@@ -1,11 +1,14 @@
 import { fetchFountainsByNil, fetchFountainsNearby, fetchHealth, fetchNilList, fetchNilStats } from "./api.js";
 import { clearReferenceArea, fitToMilan, initMap, renderFountainsOnMap, renderReferenceArea } from "./map.js";
 
-const nilSearchForm = document.getElementById("nil-search-form");
+const nilTextSearchForm = document.getElementById("nil-text-search-form");
+const nilSelectSearchForm = document.getElementById("nil-select-search-form");
 const nearbySearchForm = document.getElementById("nearby-search-form");
+const nilInput = document.getElementById("nil-input");
 const nilSelect = document.getElementById("nil-select");
 const latInput = document.getElementById("lat-input");
 const lngInput = document.getElementById("lng-input");
+const nearMeBtn = document.getElementById("near-me-btn");
 const loadStatsBtn = document.getElementById("load-stats-btn");
 const resetMapBtn = document.getElementById("reset-map-btn");
 const feedbackEl = document.getElementById("api-feedback");
@@ -57,6 +60,36 @@ function setResultsCount(count) {
   resultsCountEl.textContent = `Risultati: ${count}`;
 }
 
+function renderStatsTable(items) {
+  statsTableBody.innerHTML = "";
+
+  if (!items.length) {
+    const row = document.createElement("tr");
+    row.innerHTML = '<td colspan="2">Nessuna statistica disponibile.</td>';
+    statsTableBody.appendChild(row);
+    return;
+  }
+
+  const maxCount = Math.max(...items.map((item) => Number(item.count) || 0));
+
+  items.forEach((item) => {
+    const row = document.createElement("tr");
+    const nilCell = document.createElement("td");
+    nilCell.textContent = item.nil || "Non specificato";
+    const countCell = document.createElement("td");
+    countCell.textContent = item.count ?? 0;
+    row.appendChild(nilCell);
+    row.appendChild(countCell);
+
+    if ((Number(item.count) || 0) === maxCount && maxCount > 0) {
+      row.style.backgroundColor = "#f3fbfb";
+      row.style.fontWeight = "700";
+    }
+
+    statsTableBody.appendChild(row);
+  });
+}
+
 function parseCoordinate(valueRaw, fieldName, min, max) {
   const value = Number(valueRaw);
 
@@ -69,28 +102,6 @@ function parseCoordinate(valueRaw, fieldName, min, max) {
   }
 
   return value;
-}
-
-function renderStatsTable(items) {
-  statsTableBody.innerHTML = "";
-
-  if (!items.length) {
-    const row = document.createElement("tr");
-    row.innerHTML = '<td colspan="2">Nessuna statistica disponibile.</td>';
-    statsTableBody.appendChild(row);
-    return;
-  }
-
-  items.forEach((item) => {
-    const row = document.createElement("tr");
-    const nilCell = document.createElement("td");
-    nilCell.textContent = item.nil || "Sconosciuto";
-    const countCell = document.createElement("td");
-    countCell.textContent = item.count ?? 0;
-    row.appendChild(nilCell);
-    row.appendChild(countCell);
-    statsTableBody.appendChild(row);
-  });
 }
 
 function renderNilOptions(items) {
@@ -131,23 +142,30 @@ async function bootstrap() {
   }
 
   await loadNilDropdown();
+  await handleLoadStats();
 }
 
-async function handleNilSearch(event) {
-  event.preventDefault();
-  const nil = nilSelect.value.trim();
+async function handleLoadStats() {
+  setFeedback("Caricamento statistiche NIL in corso...", "pending");
 
-  if (!nil) {
-    setFeedback("Seleziona un NIL valido.", "warn");
-    return;
+  statsTableBody.innerHTML = '<tr><td colspan="2">Caricamento statistiche...</td></tr>';
+
+  try {
+    const items = await fetchNilStats();
+    renderStatsTable(items);
+    setFeedback(`Statistiche NIL caricate: ${items.length} righe.`, "ok");
+  } catch (error) {
+    renderStatsTable([]);
+    setFeedback(`Errore caricamento statistiche NIL: ${error.message}`, "error");
   }
+}
 
+async function runNilSearch(nil, sourceLabel) {
   setFeedback(`Ricerca fontanelle per NIL ${nil}...`, "pending");
 
   try {
     const items = await fetchFountainsByNil(nil);
     renderResultsList(items);
-    clearReferenceArea(mapContext);
     renderFountainsOnMap(mapContext, items);
     setResultsCount(items.length);
 
@@ -157,79 +175,161 @@ async function handleNilSearch(event) {
       return;
     }
 
-    setFeedback(`Trovate ${items.length} fontanelle nel NIL ${nil}.`, "ok");
+    setFeedback(`Trovate ${items.length} fontanelle nel NIL ${nil} (${sourceLabel}).`, "ok");
   } catch (error) {
     renderResultsList([]);
     setResultsCount(0);
     renderFountainsOnMap(mapContext, []);
+    fitToMilan(mapContext);
     setFeedback(`Errore ricerca NIL: ${error.message}`, "error");
   }
+}
+
+async function handleNilTextSearch(event) {
+  event.preventDefault();
+  const nil = nilInput.value.trim();
+
+  if (!nil) {
+    setFeedback("Inserisci un NIL valido nel campo testo.", "warn");
+    return;
+  }
+
+  await runNilSearch(nil, "da testo");
+}
+
+async function handleNilSelectSearch(event) {
+  event.preventDefault();
+  const nil = nilSelect.value.trim();
+
+  if (!nil) {
+    setFeedback("Seleziona un NIL valido dalla dropdown.", "warn");
+    return;
+  }
+
+  await runNilSearch(nil, "da dropdown");
 }
 
 async function handleNearbySearch(event) {
   event.preventDefault();
 
+  const latRaw = latInput.value.trim();
+  const lngRaw = lngInput.value.trim();
+
+  if (!latRaw || !lngRaw) {
+    setFeedback("Inserisci sia latitudine sia longitudine.", "warn");
+    return;
+  }
+
   try {
-    const lat = parseCoordinate(latInput.value.trim(), "lat", -90, 90);
-    const lng = parseCoordinate(lngInput.value.trim(), "lng", -180, 180);
+    const lat = parseCoordinate(latRaw, "lat", -90, 90);
+    const lng = parseCoordinate(lngRaw, "lng", -180, 180);
 
-    setFeedback("Ricerca fontanelle entro 500 m in corso...", "pending");
-
-    const data = await fetchFountainsNearby({
-      lng,
-      lat,
-      radius: DEFAULT_NEARBY_RADIUS,
-    });
-
-    const items = Array.isArray(data.items) ? data.items : [];
-    renderResultsList(items);
-    renderFountainsOnMap(mapContext, items);
-    renderReferenceArea(mapContext, {
-      lat,
-      lng,
-      radiusMeters: DEFAULT_NEARBY_RADIUS,
-    });
-    setResultsCount(items.length);
-
-    if (!items.length) {
-      setFeedback("Nessuna fontanella trovata entro 500 m dal punto inserito.", "warn");
-      return;
-    }
-
-    setFeedback(`Trovate ${items.length} fontanelle entro 500 m dal punto inserito.`, "ok");
+    await runNearbySearch({ lat, lng, sourceLabel: "dal punto inserito" });
   } catch (error) {
     setFeedback(error.message || "Errore durante la ricerca per coordinate.", "error");
   }
 }
 
-async function handleLoadStats() {
-  setFeedback("Caricamento statistiche NIL...", "pending");
+async function runNearbySearch({ lat, lng, sourceLabel }) {
+  setFeedback("Ricerca fontanelle entro 500 m in corso...", "pending");
+
+  const data = await fetchFountainsNearby({
+    lng,
+    lat,
+    radius: DEFAULT_NEARBY_RADIUS,
+  });
+
+  const items = Array.isArray(data.items) ? data.items : [];
+  const reference = data.reference_point || { lat, lng };
+  const radiusUsed = Number(data.radius_meters) || DEFAULT_NEARBY_RADIUS;
+
+  latInput.value = Number(reference.lat).toFixed(6);
+  lngInput.value = Number(reference.lng).toFixed(6);
+
+  renderResultsList(items);
+  setResultsCount(items.length);
+  renderFountainsOnMap(mapContext, items);
+  renderReferenceArea(mapContext, {
+    lat: reference.lat,
+    lng: reference.lng,
+    radiusMeters: radiusUsed,
+  });
+
+  if (!items.length) {
+    setFeedback(`Nessuna fontanella trovata entro ${radiusUsed} m ${sourceLabel}.`, "warn");
+    return;
+  }
+
+  setFeedback(`Trovate ${items.length} fontanelle entro ${radiusUsed} m ${sourceLabel}.`, "ok");
+}
+
+function geolocationErrorToMessage(error) {
+  if (!error || typeof error.code !== "number") {
+    return "Impossibile ottenere la posizione corrente.";
+  }
+
+  switch (error.code) {
+    case 1:
+      return "Permesso di geolocalizzazione negato. Abilita la posizione nel browser e riprova.";
+    case 2:
+      return "Posizione non disponibile al momento. Riprova tra qualche secondo.";
+    case 3:
+      return "Timeout della geolocalizzazione. Verifica la connessione e riprova.";
+    default:
+      return "Errore durante la geolocalizzazione dell'utente.";
+  }
+}
+
+function getCurrentPosition(options) {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options);
+  });
+}
+
+async function handleNearMeSearch() {
+  if (!navigator.geolocation) {
+    setFeedback("Geolocalizzazione non supportata da questo browser.", "error");
+    return;
+  }
+
+  setFeedback("Acquisizione posizione corrente in corso...", "pending");
 
   try {
-    const items = await fetchNilStats();
-    renderStatsTable(items);
-    setFeedback(`Statistiche NIL caricate (${items.length} righe).`, "ok");
+    const position = await getCurrentPosition({
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    });
+
+    const lat = parseCoordinate(position.coords.latitude, "lat", -90, 90);
+    const lng = parseCoordinate(position.coords.longitude, "lng", -180, 180);
+
+    await runNearbySearch({ lat, lng, sourceLabel: "dalla tua posizione" });
   } catch (error) {
-    renderStatsTable([]);
-    setFeedback(`Errore caricamento statistiche: ${error.message}`, "error");
+    const message = error instanceof Error ? error.message : geolocationErrorToMessage(error);
+    const fallbackMessage = message || geolocationErrorToMessage(error);
+    setFeedback(fallbackMessage, "error");
   }
 }
 
 function handleReset() {
+  nilInput.value = "";
   nilSelect.value = "";
   latInput.value = "";
   lngInput.value = "";
   renderResultsList([]);
   setResultsCount(0);
-  renderStatsTable([]);
+  statsTableBody.innerHTML = '<tr><td colspan="2">Premi "Carica statistiche NIL" per visualizzare i dati.</td></tr>';
   clearReferenceArea(mapContext);
   renderFountainsOnMap(mapContext, []);
   fitToMilan(mapContext);
   setFeedback("Interfaccia resettata.", "pending");
 }
 
-nilSearchForm.addEventListener("submit", handleNilSearch);
+nilTextSearchForm.addEventListener("submit", handleNilTextSearch);
+nilSelectSearchForm.addEventListener("submit", handleNilSelectSearch);
 nearbySearchForm.addEventListener("submit", handleNearbySearch);
+nearMeBtn.addEventListener("click", handleNearMeSearch);
 loadStatsBtn.addEventListener("click", handleLoadStats);
 resetMapBtn.addEventListener("click", handleReset);
 
