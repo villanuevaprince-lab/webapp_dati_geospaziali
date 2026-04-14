@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymongo import ASCENDING, GEOSPHERE, MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 
 
@@ -22,8 +22,8 @@ app = Flask(__name__, static_folder=str(CLIENT_DIR), static_url_path="")
 app.config["FLASK_ENV"] = os.getenv("FLASK_ENV", "development")
 app.config["PORT"] = int(os.getenv("PORT", "5000"))
 app.config["DEBUG"] = app.config["FLASK_ENV"].strip().lower() == "development"
-app.config["MONGODB_URI"] = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-app.config["DB_NAME"] = os.getenv("DB_NAME", "dbSpaziali")
+app.config["MONGODB_URI"] = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "mongodb://localhost:27017"
+app.config["DB_NAME"] = os.getenv("DB_NAME") or os.getenv("MONGO_DB_NAME") or "dbSpaziali"
 app.config["FOUNTAINS_COLLECTION"] = os.getenv("FOUNTAINS_COLLECTION", "vedovelle")
 app.config["NIL_COLLECTION"] = os.getenv("NIL_COLLECTION", "nil")
 app.config["JSON_SORT_KEYS"] = False
@@ -81,15 +81,30 @@ def initialize_fountains_indexes():
 
     collection = db[app.config["FOUNTAINS_COLLECTION"]]
 
-    try:
-        collection.create_index([("geometry", GEOSPHERE)], name="geometry_2dsphere_idx")
-        collection.create_index([("properties.NIL", ASCENDING)], name="properties_nil_idx")
-        collection.create_index([("properties.ID_NIL", ASCENDING)], name="properties_id_nil_idx")
+    def create_index_safely(keys, name):
+        try:
+            collection.create_index(keys, name=name)
+            return True
+        except OperationFailure as exc:
+            # Codice 85: indice equivalente gia esistente con nome diverso.
+            if getattr(exc, "code", None) == 85:
+                app.logger.info("Indice equivalente gia presente per %s", name)
+                return True
+            app.logger.error("Errore durante la creazione indice %s: %s", name, exc)
+            return False
+        except PyMongoError as exc:
+            app.logger.error("Errore durante la creazione indice %s: %s", name, exc)
+            return False
+
+    ok = True
+    ok = create_index_safely([("geometry", GEOSPHERE)], "geometry_2dsphere_idx") and ok
+    ok = create_index_safely([("coordinate", GEOSPHERE)], "coordinate_2dsphere_idx") and ok
+    ok = create_index_safely([("properties.NIL", ASCENDING)], "properties_nil_idx") and ok
+    ok = create_index_safely([("properties.ID_NIL", ASCENDING)], "properties_id_nil_idx") and ok
+
+    if ok:
         app.logger.info("Indici MongoDB inizializzati correttamente")
-        return True
-    except PyMongoError as exc:
-        app.logger.error("Errore durante la creazione indici MongoDB: %s", exc)
-        return False
+    return ok
 
 
 def get_fountains_collection():
@@ -97,6 +112,35 @@ def get_fountains_collection():
     if db is None:
         raise ConnectionError("Database MongoDB non disponibile")
     return db[app.config["FOUNTAINS_COLLECTION"]]
+
+
+def get_nil_collection():
+    db = app.extensions.get("mongo_db")
+    if db is None:
+        raise ConnectionError("Database MongoDB non disponibile")
+    return db[app.config["NIL_COLLECTION"]]
+
+
+def normalize_nil_value(value):
+    if value is None:
+        return None
+
+    normalized = re.sub(r"\s+", " ", str(value)).strip()
+    return normalized or None
+
+
+def unique_sorted_nil(values):
+    unique_map = {}
+    for value in values:
+        normalized = normalize_nil_value(value)
+        if not normalized:
+            continue
+
+        key = normalized.casefold()
+        if key not in unique_map:
+            unique_map[key] = normalized
+
+    return sorted(unique_map.values(), key=lambda item: item.casefold())
 
 
 def to_object_id_string(value):
@@ -249,12 +293,28 @@ def validate_nil_name(nil_name):
     value = str(nil_name).strip()
     if value == "":
         raise ValueError("Parametro NIL non valido")
+
+    # Normalizza spazi multipli per un confronto piu robusto.
+    value = re.sub(r"\s+", " ", value)
+
+    # Consente formati NIL reali (es. "Q.RE ... - ...") con separatori comuni.
+    if not re.fullmatch(r"[\w\s'\-\./()&,]+", value, flags=re.UNICODE):
+        raise ValueError("Parametro NIL non valido")
+
     return value
 
 
-def build_near_query(lng, lat, radius_meters):
+def build_nil_regex(search_text):
+    tokens = [re.escape(token) for token in search_text.split() if token]
+    if not tokens:
+        raise ValueError("Parametro NIL non valido")
+
+    return r"[\s\-.']*".join(tokens)
+
+
+def build_near_query(field_name, lng, lat, radius_meters):
     return {
-        "geometry": {
+        field_name: {
             "$near": {
                 "$geometry": {
                     "type": "Point",
@@ -281,16 +341,43 @@ def list_fountains(limit=100, nil_filter=None):
 
 def get_fountains_by_nil(nil_name, limit=200):
     collection = get_fountains_collection()
-    query = {"properties.NIL": {"$regex": f"^{re.escape(nil_name)}$", "$options": "i"}}
+    nil_regex = build_nil_regex(nil_name)
+    query_clauses = [
+        {"properties.NIL": {"$regex": nil_regex, "$options": "i"}},
+        {"nil": {"$regex": nil_regex, "$options": "i"}},
+    ]
+
+    # Se l'utente inserisce un codice NIL numerico, match anche su ID_NIL.
+    if nil_name.isdigit():
+        query_clauses.append({"properties.ID_NIL": str(int(nil_name))})
+
+    query = {"$or": query_clauses}
     documents = list(collection.find(query).limit(limit))
     return serialize_fountains(documents)
 
 
 def get_fountains_nearby(lng, lat, radius_meters=500, limit=100):
     collection = get_fountains_collection()
-    query = build_near_query(lng=lng, lat=lat, radius_meters=radius_meters)
-    documents = list(collection.find(query).limit(limit))
-    return serialize_fountains(documents)
+    last_error = None
+
+    for field_name in ("coordinate", "geometry"):
+        try:
+            query = build_near_query(
+                field_name=field_name,
+                lng=lng,
+                lat=lat,
+                radius_meters=radius_meters,
+            )
+            documents = list(collection.find(query).limit(limit))
+            if documents:
+                return serialize_fountains(documents)
+        except PyMongoError as exc:
+            last_error = exc
+            app.logger.warning("Ricerca geospaziale su campo %s non riuscita: %s", field_name, exc)
+
+    if last_error:
+        raise last_error
+    return []
 
 
 def get_fountains_stats_by_nil():
@@ -304,6 +391,50 @@ def get_fountains_stats_by_nil():
     ]
 
     return list(collection.aggregate(pipeline))
+
+
+def get_available_nil_list():
+    nil_values = []
+
+    # Tentativo primario: collezione NIL dedicata.
+    try:
+        nil_collection = get_nil_collection()
+
+        pipeline = [
+            {
+                "$project": {
+                    "candidate": {
+                        "$ifNull": ["$properties.NIL", {"$ifNull": ["$NIL", "$nil"]}]
+                    }
+                }
+            },
+            {"$match": {"candidate": {"$ne": None, "$type": "string"}}},
+            {
+                "$project": {
+                    "candidate": {
+                        "$trim": {
+                            "input": "$candidate",
+                            "chars": " \t\n\r",
+                        }
+                    }
+                }
+            },
+            {"$match": {"candidate": {"$ne": ""}}},
+        ]
+
+        nil_values = [item.get("candidate") for item in nil_collection.aggregate(pipeline)]
+    except (ConnectionError, PyMongoError) as exc:
+        app.logger.warning("Impossibile leggere NIL dalla collection dedicata: %s", exc)
+        nil_values = []
+
+    # Fallback: ricava NIL dalle vedovelle se la collection nil e' vuota/non adatta.
+    if not nil_values:
+        collection = get_fountains_collection()
+        from_properties = collection.distinct("properties.NIL")
+        from_root = collection.distinct("nil")
+        nil_values = [*from_properties, *from_root]
+
+    return unique_sorted_nil(nil_values)
 
 
 @app.errorhandler(HTTPException)
@@ -365,9 +496,13 @@ def fountains_by_nil_route(nil_name):
         limit = validate_limit(request.args.get("limit"), default=200)
 
         items = get_fountains_by_nil(nil_name=normalized_nil_name, limit=limit)
+        message = "Fontanelle per NIL recuperate"
+        if not items:
+            message = f"Nessuna fontanella trovata per il NIL '{normalized_nil_name}'"
+
         return success_response(
             data={"nil": normalized_nil_name, "items": items, "count": len(items)},
-            message="Fontanelle per NIL recuperate",
+            message=message,
             status_code=200,
         )
     except ValueError as exc:
@@ -390,7 +525,8 @@ def fountains_nearby_route():
         items = get_fountains_nearby(lng=lng, lat=lat, radius_meters=radius, limit=limit)
         return success_response(
             data={
-                "query": {"lng": lng, "lat": lat, "radius": radius},
+                "reference_point": {"lng": lng, "lat": lat},
+                "radius_meters": radius,
                 "items": items,
                 "count": len(items),
             },
@@ -414,6 +550,23 @@ def fountains_stats_by_nil_route():
         return success_response(
             data={"items": items, "count": len(items)},
             message="Statistiche NIL recuperate",
+            status_code=200,
+        )
+    except (ConnectionError, PyMongoError) as exc:
+        return error_response(
+            message="Database non disponibile",
+            status_code=503,
+            details={"reason": str(exc)},
+        )
+
+
+@app.get("/api/nil")
+def nil_list_route():
+    try:
+        items = get_available_nil_list()
+        return success_response(
+            data={"items": items, "count": len(items)},
+            message="Elenco NIL recuperato",
             status_code=200,
         )
     except (ConnectionError, PyMongoError) as exc:

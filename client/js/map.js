@@ -59,13 +59,15 @@ export function initMap(containerId) {
   });
 
   const markersLayer = L.layerGroup().addTo(map);
-  return { map, markersLayer };
+  const referenceLayer = L.layerGroup().addTo(map);
+  return { map, markersLayer, referenceLayer };
 }
 
 export function fitToMilan(mapContext) {
   if (!mapContext?.map) {
     return;
   }
+  clearReferenceArea(mapContext);
   mapContext.map.setView(MILAN_CENTER, MILAN_ZOOM);
 }
 
@@ -110,4 +112,71 @@ export function renderFountainsOnMap(mapContext, fountains) {
   if (bounds.length > 1) {
     map.fitBounds(bounds, { padding: [32, 32] });
   }
+}
+
+export function clearReferenceArea(mapContext) {
+  if (!mapContext?.referenceLayer) {
+    return;
+  }
+  mapContext.referenceLayer.clearLayers();
+}
+
+function fitToAllLayers(mapContext) {
+  const { map, markersLayer, referenceLayer } = mapContext;
+  const bounds = [];
+
+  const collectBounds = (layerGroup) => {
+    layerGroup.eachLayer((layer) => {
+      if (typeof layer.getBounds === "function") {
+        const layerBounds = layer.getBounds();
+        if (layerBounds?.isValid?.()) {
+          bounds.push(layerBounds.getNorthEast(), layerBounds.getSouthWest());
+        }
+        return;
+      }
+
+      if (typeof layer.getLatLng === "function") {
+        bounds.push(layer.getLatLng());
+      }
+    });
+  };
+
+  collectBounds(markersLayer);
+  collectBounds(referenceLayer);
+
+  if (!bounds.length) {
+    return;
+  }
+
+  if (bounds.length === 1) {
+    map.setView(bounds[0], 15);
+    return;
+  }
+
+  map.fitBounds(L.latLngBounds(bounds), { padding: [32, 32] });
+}
+
+export function renderReferenceArea(mapContext, { lat, lng, radiusMeters = 500 }) {
+  if (!mapContext?.map || !mapContext?.referenceLayer) {
+    return;
+  }
+
+  const { referenceLayer } = mapContext;
+  referenceLayer.clearLayers();
+
+  const refLatLng = [Number(lat), Number(lng)];
+  const marker = L.marker(refLatLng, { title: "Punto di ricerca" });
+  marker.bindPopup("Punto inserito dall'utente");
+  referenceLayer.addLayer(marker);
+
+  const circle = L.circle(refLatLng, {
+    radius: Number(radiusMeters),
+    color: "#0d6e6e",
+    fillColor: "#0d6e6e",
+    fillOpacity: 0.12,
+    weight: 2,
+  });
+  referenceLayer.addLayer(circle);
+
+  fitToAllLayers(mapContext);
 }

@@ -135,7 +135,35 @@ input[type="text"] {
   flex: 1;
 }
 
+input[type="number"] {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  min-width: 220px;
+  flex: 1;
+}
+
+select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  min-width: 220px;
+  flex: 1;
+  background: #fff;
+  color: var(--text);
+}
+
 input[type="text"]:focus-visible {
+  outline: 3px solid rgba(13, 110, 110, 0.2);
+  border-color: var(--accent);
+}
+
+input[type="number"]:focus-visible {
+  outline: 3px solid rgba(13, 110, 110, 0.2);
+  border-color: var(--accent);
+}
+
+select:focus-visible {
   outline: 3px solid rgba(13, 110, 110, 0.2);
   border-color: var(--accent);
 }
@@ -165,6 +193,12 @@ input[type="text"]:focus-visible {
   gap: 0.5rem;
   max-height: 320px;
   overflow: auto;
+}
+
+.results-count {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .results-list li {
@@ -233,6 +267,16 @@ button:focus-visible {
   }
 
   input[type="text"] {
+    min-width: 0;
+    width: 100%;
+  }
+
+  input[type="number"] {
+    min-width: 0;
+    width: 100%;
+  }
+
+  select {
     min-width: 0;
     width: 100%;
   }
