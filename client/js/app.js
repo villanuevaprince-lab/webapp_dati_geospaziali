@@ -1,5 +1,26 @@
-import { fetchFountainsByNil, fetchFountainsNearby, fetchHealth, fetchNilList, fetchNilStats } from "./api.js";
-import { clearReferenceArea, fitToMilan, initMap, renderFountainsOnMap, renderReferenceArea } from "./map.js";
+import {
+  fetchChoroplethGeojsonByNil,
+  fetchChoroplethGeojson,
+  fetchFountainsByNil,
+  fetchFountainsNearby,
+  fetchHealth,
+  fetchNilList,
+  fetchNilStats,
+} from "./api.js";
+import {
+  clearChoroplethLayer,
+  clearSelectedNilLayer,
+  clearReferenceArea,
+  fitToMilan,
+  getNearbySearchHandlePosition,
+  initMap,
+  renderFountainsOnMap,
+  renderSelectedNilFeature,
+  renderNilChoropleth,
+  renderReferenceArea,
+  setNearbySearchHandlePosition,
+  setupNearbySearchHandle,
+} from "./map.js";
 
 const nilTextSearchForm = document.getElementById("nil-text-search-form");
 const nilSelectSearchForm = document.getElementById("nil-select-search-form");
@@ -8,8 +29,12 @@ const nilInput = document.getElementById("nil-input");
 const nilSelect = document.getElementById("nil-select");
 const latInput = document.getElementById("lat-input");
 const lngInput = document.getElementById("lng-input");
+const show500mCircleBtn = document.getElementById("show-500m-circle-btn");
+const teleportBtn = document.getElementById("teleport-btn");
 const nearMeBtn = document.getElementById("near-me-btn");
 const loadStatsBtn = document.getElementById("load-stats-btn");
+const loadChoroplethBtn = document.getElementById("load-choropleth-btn");
+const hideChoroplethBtn = document.getElementById("hide-choropleth-btn");
 const resetMapBtn = document.getElementById("reset-map-btn");
 const feedbackEl = document.getElementById("api-feedback");
 const resultsListEl = document.getElementById("results-list");
@@ -18,6 +43,7 @@ const statsTableBody = document.querySelector("#stats-table tbody");
 
 let mapContext = null;
 const DEFAULT_NEARBY_RADIUS = 500;
+const DEFAULT_SEARCH_POINT = { lat: 45.4642, lng: 9.19 };
 
 function setFeedback(message, tone = "pending") {
   feedbackEl.textContent = message;
@@ -104,6 +130,28 @@ function parseCoordinate(valueRaw, fieldName, min, max) {
   return value;
 }
 
+function updateNearbyInputs({ lat, lng }) {
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+    return;
+  }
+
+  latInput.value = Number(lat).toFixed(6);
+  lngInput.value = Number(lng).toFixed(6);
+}
+
+function getCoordinatesFromInputs() {
+  const latRaw = latInput.value.trim();
+  const lngRaw = lngInput.value.trim();
+
+  if (!latRaw || !lngRaw) {
+    throw new Error("Inserisci latitudine e longitudine per questa azione.");
+  }
+
+  const lat = parseCoordinate(latRaw, "lat", -90, 90);
+  const lng = parseCoordinate(lngRaw, "lng", -180, 180);
+  return { lat, lng };
+}
+
 function renderNilOptions(items) {
   nilSelect.innerHTML = "";
 
@@ -133,6 +181,11 @@ async function loadNilDropdown() {
 async function bootstrap() {
   mapContext = initMap("map");
   fitToMilan(mapContext);
+  setupNearbySearchHandle(mapContext, {
+    lat: DEFAULT_SEARCH_POINT.lat,
+    lng: DEFAULT_SEARCH_POINT.lng,
+    onPositionChange: updateNearbyInputs,
+  });
 
   try {
     const data = await fetchHealth();
@@ -160,18 +213,64 @@ async function handleLoadStats() {
   }
 }
 
+async function handleLoadChoropleth() {
+  setFeedback("Caricamento mappa choropleth NIL in corso...", "pending");
+
+  try {
+    const geojson = await fetchChoroplethGeojson();
+    const features = Array.isArray(geojson.features) ? geojson.features : [];
+
+    clearReferenceArea(mapContext);
+    renderResultsList([]);
+    setResultsCount(0);
+    renderNilChoropleth(mapContext, geojson);
+
+    if (!features.length) {
+      setFeedback("Nessuna geometria NIL disponibile per la choropleth.", "warn");
+      fitToMilan(mapContext);
+      return;
+    }
+
+    setFeedback(`Choropleth NIL caricata con ${features.length} aree.`, "ok");
+  } catch (error) {
+    setFeedback(`Errore caricamento choropleth: ${error.message}`, "error");
+  }
+}
+
+function handleHideChoropleth() {
+  clearChoroplethLayer(mapContext);
+  clearSelectedNilLayer(mapContext);
+  setFeedback("Mappa choropleth disattivata.", "pending");
+}
+
 async function runNilSearch(nil, sourceLabel) {
   setFeedback(`Ricerca fontanelle per NIL ${nil}...`, "pending");
 
   try {
-    const items = await fetchFountainsByNil(nil);
+    const [items, selectedNilGeojson] = await Promise.all([
+      fetchFountainsByNil(nil),
+      fetchChoroplethGeojsonByNil(nil),
+    ]);
+    const selectedFeatures = Array.isArray(selectedNilGeojson.features) ? selectedNilGeojson.features : [];
+
+    clearChoroplethLayer(mapContext);
+    const hasSelectedNil = renderSelectedNilFeature(mapContext, selectedNilGeojson);
+
+    if (!hasSelectedNil || !selectedFeatures.length) {
+      renderResultsList([]);
+      setResultsCount(0);
+      renderFountainsOnMap(mapContext, []);
+      fitToMilan(mapContext);
+      setFeedback(`NIL ${nil} non trovato nella cartografia disponibile.`, "warn");
+      return;
+    }
+
     renderResultsList(items);
-    renderFountainsOnMap(mapContext, items);
     setResultsCount(items.length);
+    renderFountainsOnMap(mapContext, items, { fit: false });
 
     if (!items.length) {
-      fitToMilan(mapContext);
-      setFeedback(`Nessuna fontanella trovata per il NIL ${nil}.`, "warn");
+      setFeedback(`Nessuna fontanella trovata nel NIL ${nil}.`, "warn");
       return;
     }
 
@@ -180,6 +279,7 @@ async function runNilSearch(nil, sourceLabel) {
     renderResultsList([]);
     setResultsCount(0);
     renderFountainsOnMap(mapContext, []);
+    clearSelectedNilLayer(mapContext);
     fitToMilan(mapContext);
     setFeedback(`Errore ricerca NIL: ${error.message}`, "error");
   }
@@ -212,6 +312,16 @@ async function handleNilSelectSearch(event) {
 async function handleNearbySearch(event) {
   event.preventDefault();
 
+  const markerPosition = getNearbySearchHandlePosition(mapContext);
+  if (markerPosition) {
+    await runNearbySearch({
+      lat: markerPosition.lat,
+      lng: markerPosition.lng,
+      sourceLabel: "dal punto selezionato in mappa",
+    });
+    return;
+  }
+
   const latRaw = latInput.value.trim();
   const lngRaw = lngInput.value.trim();
 
@@ -230,8 +340,47 @@ async function handleNearbySearch(event) {
   }
 }
 
+function handleShow500mCircle() {
+  try {
+    const markerPosition = getNearbySearchHandlePosition(mapContext);
+    const coords = markerPosition || getCoordinatesFromInputs();
+
+    setNearbySearchHandlePosition(mapContext, {
+      lat: coords.lat,
+      lng: coords.lng,
+      panTo: true,
+    });
+
+    renderReferenceArea(mapContext, {
+      lat: coords.lat,
+      lng: coords.lng,
+      radiusMeters: DEFAULT_NEARBY_RADIUS,
+    });
+    setFeedback("Cerchio di 500 m visualizzato sulla mappa.", "ok");
+  } catch (error) {
+    setFeedback(error.message || "Impossibile mostrare il cerchio 500 m.", "error");
+  }
+}
+
+function handleTeleportToCoordinates() {
+  try {
+    const { lat, lng } = getCoordinatesFromInputs();
+    setNearbySearchHandlePosition(mapContext, {
+      lat,
+      lng,
+      panTo: true,
+    });
+    setFeedback("Punto di ricerca teletrasportato su latitudine/longitudine inserite.", "ok");
+  } catch (error) {
+    setFeedback(error.message || "Coordinate non valide per il teletrasporto.", "error");
+  }
+}
+
 async function runNearbySearch({ lat, lng, sourceLabel }) {
   setFeedback("Ricerca fontanelle entro 500 m in corso...", "pending");
+
+  clearChoroplethLayer(mapContext);
+  clearSelectedNilLayer(mapContext);
 
   const data = await fetchFountainsNearby({
     lng,
@@ -245,6 +394,10 @@ async function runNearbySearch({ lat, lng, sourceLabel }) {
 
   latInput.value = Number(reference.lat).toFixed(6);
   lngInput.value = Number(reference.lng).toFixed(6);
+  setNearbySearchHandlePosition(mapContext, {
+    lat: Number(reference.lat),
+    lng: Number(reference.lng),
+  });
 
   renderResultsList(items);
   setResultsCount(items.length);
@@ -303,6 +456,11 @@ async function handleNearMeSearch() {
 
     const lat = parseCoordinate(position.coords.latitude, "lat", -90, 90);
     const lng = parseCoordinate(position.coords.longitude, "lng", -180, 180);
+    setNearbySearchHandlePosition(mapContext, {
+      lat,
+      lng,
+      panTo: true,
+    });
 
     await runNearbySearch({ lat, lng, sourceLabel: "dalla tua posizione" });
   } catch (error) {
@@ -321,8 +479,14 @@ function handleReset() {
   setResultsCount(0);
   statsTableBody.innerHTML = '<tr><td colspan="2">Premi "Carica statistiche NIL" per visualizzare i dati.</td></tr>';
   clearReferenceArea(mapContext);
+  clearChoroplethLayer(mapContext);
+  clearSelectedNilLayer(mapContext);
   renderFountainsOnMap(mapContext, []);
   fitToMilan(mapContext);
+  setNearbySearchHandlePosition(mapContext, {
+    lat: DEFAULT_SEARCH_POINT.lat,
+    lng: DEFAULT_SEARCH_POINT.lng,
+  });
   setFeedback("Interfaccia resettata.", "pending");
 }
 
@@ -330,7 +494,11 @@ nilTextSearchForm.addEventListener("submit", handleNilTextSearch);
 nilSelectSearchForm.addEventListener("submit", handleNilSelectSearch);
 nearbySearchForm.addEventListener("submit", handleNearbySearch);
 nearMeBtn.addEventListener("click", handleNearMeSearch);
+show500mCircleBtn.addEventListener("click", handleShow500mCircle);
+teleportBtn.addEventListener("click", handleTeleportToCoordinates);
 loadStatsBtn.addEventListener("click", handleLoadStats);
+loadChoroplethBtn.addEventListener("click", handleLoadChoropleth);
+hideChoroplethBtn.addEventListener("click", handleHideChoropleth);
 resetMapBtn.addEventListener("click", handleReset);
 
 document.addEventListener("DOMContentLoaded", bootstrap);

@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,8 +74,8 @@ def init_mongo():
         return False
 
 
-def initialize_fountains_indexes():
-    db = app.extensions.get("mongo_db")
+def initialize_fountains_indexes(): 
+    db = app.extensions.get("mongo_db") 
     if db is None:
         app.logger.warning("Indice non creato: database MongoDB non inizializzato")
         return False
@@ -127,6 +128,21 @@ def normalize_nil_value(value):
 
     normalized = re.sub(r"\s+", " ", str(value)).strip()
     return normalized or None
+
+
+def normalize_nil_key(value):
+    normalized_value = normalize_nil_value(value)
+    if not normalized_value:
+        return None
+
+    ascii_normalized = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", normalized_value)
+        if not unicodedata.combining(char)
+    )
+    compact = re.sub(r"[^\w\s]", " ", ascii_normalized)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    return compact.casefold() or None
 
 
 def unique_sorted_nil(values):
@@ -341,15 +357,20 @@ def list_fountains(limit=100, nil_filter=None):
 
 def get_fountains_by_nil(nil_name, limit=200):
     collection = get_fountains_collection()
-    nil_regex = build_nil_regex(nil_name)
+    normalized_nil_name = normalize_nil_value(nil_name) or nil_name
+    nil_regex = build_nil_regex(normalized_nil_name)
+    nil_partial_regex = re.escape(normalized_nil_name)
+
     query_clauses = [
         {"properties.NIL": {"$regex": nil_regex, "$options": "i"}},
         {"nil": {"$regex": nil_regex, "$options": "i"}},
+        {"properties.NIL": {"$regex": nil_partial_regex, "$options": "i"}},
+        {"nil": {"$regex": nil_partial_regex, "$options": "i"}},
     ]
 
     # Se l'utente inserisce un codice NIL numerico, match anche su ID_NIL.
-    if nil_name.isdigit():
-        query_clauses.append({"properties.ID_NIL": str(int(nil_name))})
+    if normalized_nil_name.isdigit():
+        query_clauses.append({"properties.ID_NIL": str(int(normalized_nil_name))})
 
     query = {"$or": query_clauses}
     documents = list(collection.find(query).limit(limit))
@@ -471,9 +492,256 @@ def get_available_nil_list():
     return unique_sorted_nil(nil_values)
 
 
+def extract_nil_name_from_doc(document):
+    if not isinstance(document, dict):
+        return None
+
+    properties = document.get("properties")
+    candidates = []
+
+    if isinstance(properties, dict):
+        candidates.extend(
+            [
+                properties.get("NIL"),
+                properties.get("nil"),
+                properties.get("nome"),
+                properties.get("NOME"),
+                properties.get("name"),
+                properties.get("Name"),
+            ]
+        )
+
+    candidates.extend(
+        [
+            document.get("NIL"),
+            document.get("nil"),
+            document.get("nome"),
+            document.get("NOME"),
+            document.get("name"),
+            document.get("Name"),
+        ]
+    )
+
+    for candidate in candidates:
+        normalized = normalize_nil_value(candidate)
+        if normalized:
+            return normalized
+
+    return None
+
+
+def extract_geometry_from_geojson_candidate(candidate):
+    if not isinstance(candidate, dict):
+        return None
+
+    geometry_type = candidate.get("type")
+    coordinates = candidate.get("coordinates")
+    if isinstance(geometry_type, str) and isinstance(coordinates, list):
+        return {
+            "type": geometry_type,
+            "coordinates": coordinates,
+        }
+
+    if geometry_type == "Feature" and isinstance(candidate.get("geometry"), dict):
+        geometry = candidate.get("geometry")
+        nested_type = geometry.get("type")
+        nested_coordinates = geometry.get("coordinates")
+        if isinstance(nested_type, str) and isinstance(nested_coordinates, list):
+            return {
+                "type": nested_type,
+                "coordinates": nested_coordinates,
+            }
+
+    return None
+
+
+def extract_nil_geometry(document):
+    if not isinstance(document, dict):
+        return None
+
+    if document.get("type") == "Feature":
+        geometry = extract_geometry_from_geojson_candidate(document.get("geometry"))
+        if geometry:
+            return geometry
+
+    for field_name in ("geometry", "geom", "the_geom", "wkb_geometry", "geojson", "feature"):
+        geometry = extract_geometry_from_geojson_candidate(document.get(field_name))
+        if geometry:
+            return geometry
+
+    return None
+
+
+def iter_nil_feature_documents(nil_documents):
+    for document in nil_documents:
+        if not isinstance(document, dict):
+            continue
+
+        if document.get("type") == "FeatureCollection" and isinstance(document.get("features"), list):
+            for feature in document["features"]:
+                if isinstance(feature, dict):
+                    yield feature
+            continue
+
+        yield document
+
+
+def build_nil_counts_map(fountains_collection):
+    counts_pipeline = [
+        {
+            "$project": {
+                "raw_nil": {
+                    "$ifNull": ["$nil", {"$ifNull": ["$properties.NIL", ""]}]
+                }
+            }
+        },
+        {
+            "$project": {
+                "raw_nil": {
+                    "$trim": {
+                        "input": {
+                            "$convert": {
+                                "input": "$raw_nil",
+                                "to": "string",
+                                "onError": "",
+                                "onNull": "",
+                            }
+                        },
+                        "chars": " \t\n\r",
+                    }
+                }
+            }
+        },
+        {"$match": {"raw_nil": {"$ne": ""}}},
+        {"$group": {"_id": "$raw_nil", "count": {"$sum": 1}}},
+    ]
+
+    nil_counts = {}
+    for item in fountains_collection.aggregate(counts_pipeline):
+        raw_nil = item.get("_id")
+        count = int(item.get("count", 0))
+        nil_key = normalize_nil_key(raw_nil)
+        if not nil_key:
+            continue
+        nil_counts[nil_key] = nil_counts.get(nil_key, 0) + count
+
+    return nil_counts
+
+
+def get_choropleth_geojson():
+    fountains_collection = get_fountains_collection()
+    nil_collection = get_nil_collection()
+
+    nil_counts = build_nil_counts_map(fountains_collection)
+
+    raw_nil_documents = list(nil_collection.find({}))
+    features = []
+
+    for document in iter_nil_feature_documents(raw_nil_documents):
+        geometry = extract_nil_geometry(document)
+        if not geometry:
+            continue
+
+        nil_name = extract_nil_name_from_doc(document) or "NIL non specificato"
+        nil_key = normalize_nil_key(nil_name)
+        count = nil_counts.get(nil_key, 0) if nil_key else 0
+
+        doc_properties = document.get("properties") if isinstance(document.get("properties"), dict) else {}
+        feature_properties = {**doc_properties}
+        feature_properties["nil"] = nil_name
+        feature_properties["fontanelle_count"] = int(count)
+
+        features.append(
+            {
+                "type": "Feature",
+                "properties": feature_properties,
+                "geometry": geometry,
+            }
+        )
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+
+def get_choropleth_geojson_for_nil(nil_name):
+    fountains_collection = get_fountains_collection()
+    nil_collection = get_nil_collection()
+
+    target_key = normalize_nil_key(nil_name)
+    if not target_key:
+        return {"type": "FeatureCollection", "features": []}
+
+    nil_counts = build_nil_counts_map(fountains_collection)
+    nil_regex = build_nil_regex(nil_name)
+    nil_partial_regex = re.escape(normalize_nil_value(nil_name) or str(nil_name))
+    regex_query = {
+        "$or": [
+            {"properties.NIL": {"$regex": nil_regex, "$options": "i"}},
+            {"properties.NIL": {"$regex": nil_partial_regex, "$options": "i"}},
+            {"NIL": {"$regex": nil_regex, "$options": "i"}},
+            {"NIL": {"$regex": nil_partial_regex, "$options": "i"}},
+            {"nil": {"$regex": nil_regex, "$options": "i"}},
+            {"nil": {"$regex": nil_partial_regex, "$options": "i"}},
+            {"nome": {"$regex": nil_regex, "$options": "i"}},
+            {"nome": {"$regex": nil_partial_regex, "$options": "i"}},
+        ]
+    }
+    raw_nil_documents = list(nil_collection.find(regex_query))
+
+    best_feature = None
+    best_score = -1
+
+    for document in iter_nil_feature_documents(raw_nil_documents):
+        geometry = extract_nil_geometry(document)
+        if not geometry:
+            continue
+
+        doc_nil_name = extract_nil_name_from_doc(document)
+        doc_nil_key = normalize_nil_key(doc_nil_name)
+        if not doc_nil_key:
+            continue
+
+        if doc_nil_key == target_key:
+            match_score = 3
+        elif target_key in doc_nil_key:
+            match_score = 2
+        else:
+            continue
+
+        count = int(nil_counts.get(doc_nil_key, 0))
+        resolved_name = doc_nil_name or normalize_nil_value(nil_name) or str(nil_name)
+
+        doc_properties = document.get("properties") if isinstance(document.get("properties"), dict) else {}
+        feature_properties = {**doc_properties}
+        feature_properties["nil"] = resolved_name
+        feature_properties["fontanelle_count"] = count
+
+        # Preferisce match esatto, poi parziale con piu fontanelle.
+        current_score = (match_score * 100000) + count
+        if current_score > best_score:
+            best_score = current_score
+            best_feature = {
+                "type": "Feature",
+                "properties": feature_properties,
+                "geometry": geometry,
+            }
+
+    if best_feature is not None:
+        return {
+            "type": "FeatureCollection",
+            "features": [best_feature],
+        }
+
+    return {
+        "type": "FeatureCollection",
+        "features": [],
+    }
+
 @app.errorhandler(HTTPException)
 def handle_http_error(error):
-    details = {
+    details = { 
         "code": error.code,
         "name": error.name,
         "description": error.description,
@@ -586,6 +854,52 @@ def fountains_stats_by_nil_route():
             message="Statistiche NIL recuperate",
             status_code=200,
         )
+    except (ConnectionError, PyMongoError) as exc:
+        return error_response(
+            message="Database non disponibile",
+            status_code=503,
+            details={"reason": str(exc)},
+        )
+
+
+@app.get("/api/fontanelle/choropleth")
+def fountains_choropleth_route():
+    try:
+        geojson = get_choropleth_geojson()
+        return success_response(
+            data=geojson,
+            message="GeoJSON choropleth NIL recuperato",
+            status_code=200,
+        )
+    except (ConnectionError, PyMongoError) as exc:
+        return error_response(
+            message="Database non disponibile",
+            status_code=503,
+            details={"reason": str(exc)},
+        )
+
+
+@app.get("/api/fontanelle/choropleth/nil/<nil_name>")
+def fountains_choropleth_single_nil_route(nil_name):
+    try:
+        normalized_nil_name = validate_nil_name(nil_name)
+        geojson = get_choropleth_geojson_for_nil(normalized_nil_name)
+        feature_count = len(geojson.get("features", []))
+
+        if feature_count == 0:
+            return success_response(
+                data=geojson,
+                message=f"Nessuna geometria NIL trovata per '{normalized_nil_name}'",
+                status_code=200,
+            )
+
+        return success_response(
+            data=geojson,
+            message=f"GeoJSON NIL '{normalized_nil_name}' recuperato",
+            status_code=200,
+        )
+    except ValueError as exc:
+        return error_response(message=str(exc), status_code=400)
     except (ConnectionError, PyMongoError) as exc:
         return error_response(
             message="Database non disponibile",

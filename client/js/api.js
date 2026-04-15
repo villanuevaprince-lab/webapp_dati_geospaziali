@@ -48,3 +48,27 @@ export async function fetchNilStats() {
   const data = await request("/fontanelle/stats/nil");
   return Array.isArray(data.items) ? data.items : [];
 }
+
+export async function fetchChoroplethGeojson() {
+  const data = await request("/fontanelle/choropleth");
+  if (data && data.type === "FeatureCollection" && Array.isArray(data.features)) {
+    return data;
+  }
+
+  return {
+    type: "FeatureCollection",
+    features: [],
+  };
+}
+
+export async function fetchChoroplethGeojsonByNil(nilName) {
+  const data = await request(`/fontanelle/choropleth/nil/${encodeURIComponent(nilName)}`);
+  if (data && data.type === "FeatureCollection" && Array.isArray(data.features)) {
+    return data;
+  }
+
+  return {
+    type: "FeatureCollection",
+    features: [],
+  };
+}

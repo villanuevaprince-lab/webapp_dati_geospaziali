@@ -179,6 +179,53 @@ select:focus-visible {
   border: 1px solid var(--border);
 }
 
+.nearby-search-handle-icon {
+  background: transparent;
+  border: 0;
+}
+
+.nearby-search-handle-icon span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #d9480f;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(104, 35, 7, 0.35);
+}
+
+.nil-choropleth-legend {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #d3deea;
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  color: #1f2d3d;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12);
+  line-height: 1.3;
+}
+
+.nil-choropleth-legend h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.nil-choropleth-legend div {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  font-size: 0.78rem;
+}
+
+.nil-choropleth-legend i {
+  width: 16px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  display: inline-block;
+}
+
 .split-grid {
   display: grid;
   gap: 1rem;
