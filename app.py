@@ -33,6 +33,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
 def success_response(data=None, message="OK", status_code=200):
+    """Restituisce una risposta JSON standardizzata per esiti positivi."""
     payload = {
         "ok": True,
         "message": message,
@@ -42,6 +43,7 @@ def success_response(data=None, message="OK", status_code=200):
 
 
 def error_response(message="Errore", status_code=400, details=None):
+    """Restituisce una risposta JSON standardizzata per esiti di errore."""
     payload = {
         "ok": False,
         "message": message,
@@ -51,6 +53,7 @@ def error_response(message="Errore", status_code=400, details=None):
 
 
 def init_mongo():
+    """Inizializza la connessione MongoDB e salva client/database in app.extensions."""
     mongodb_uri = app.config["MONGODB_URI"]
     db_name = app.config["DB_NAME"]
 
@@ -75,6 +78,7 @@ def init_mongo():
 
 
 def initialize_fountains_indexes(): 
+    """Crea gli indici principali per ricerche geospaziali e per NIL/ID_NIL."""
     db = app.extensions.get("mongo_db") 
     if db is None:
         app.logger.warning("Indice non creato: database MongoDB non inizializzato")
@@ -109,6 +113,7 @@ def initialize_fountains_indexes():
 
 
 def get_fountains_collection():
+    """Restituisce la collection fontanelle configurata."""
     db = app.extensions.get("mongo_db")
     if db is None:
         raise ConnectionError("Database MongoDB non disponibile")
@@ -116,6 +121,7 @@ def get_fountains_collection():
 
 
 def get_nil_collection():
+    """Restituisce la collection NIL configurata."""
     db = app.extensions.get("mongo_db")
     if db is None:
         raise ConnectionError("Database MongoDB non disponibile")
@@ -123,6 +129,7 @@ def get_nil_collection():
 
 
 def normalize_nil_value(value):
+    """Normalizza una stringa NIL comprimendo spazi e rimuovendo estremi."""
     if value is None:
         return None
 
@@ -131,6 +138,7 @@ def normalize_nil_value(value):
 
 
 def normalize_nil_key(value):
+    """Produce una chiave NIL canonica per confronti robusti (accenti/case/punteggiatura)."""
     normalized_value = normalize_nil_value(value)
     if not normalized_value:
         return None
@@ -146,6 +154,7 @@ def normalize_nil_key(value):
 
 
 def unique_sorted_nil(values):
+    """Deduplica una lista NIL in modo case-insensitive e la ordina alfabeticamente."""
     unique_map = {}
     for value in values:
         normalized = normalize_nil_value(value)
@@ -160,6 +169,7 @@ def unique_sorted_nil(values):
 
 
 def to_object_id_string(value):
+    """Converte ObjectId (o valori analoghi) in stringa serializzabile."""
     if isinstance(value, ObjectId):
         return str(value)
     if value is None:
@@ -168,6 +178,7 @@ def to_object_id_string(value):
 
 
 def validate_point_geometry(geometry):
+    """Valida una geometria GeoJSON Point e ne normalizza i tipi numerici."""
     if not isinstance(geometry, dict):
         raise ValueError("Il campo geometry deve essere un oggetto GeoJSON")
 
@@ -191,6 +202,7 @@ def validate_point_geometry(geometry):
 
 
 def serialize_fountain(document):
+    """Converte un documento fontanella DB nel formato usato dal frontend/API."""
     if not isinstance(document, dict):
         raise ValueError("Il documento fontanella deve essere un dizionario")
 
@@ -243,10 +255,12 @@ def serialize_fountain(document):
 
 
 def serialize_fountains(documents):
+    """Serializza una lista di documenti fontanelle."""
     return [serialize_fountain(item) for item in documents]
 
 
 def to_float(value, field_name):
+    """Converte un input in float con errori descrittivi lato API."""
     if value is None or str(value).strip() == "":
         raise ValueError(f"Parametro '{field_name}' obbligatorio")
 
@@ -257,6 +271,7 @@ def to_float(value, field_name):
 
 
 def validate_lng_lat(lng_raw, lat_raw):
+    """Valida coordinate geografiche in range WGS84."""
     lng = to_float(lng_raw, "lng")
     lat = to_float(lat_raw, "lat")
 
@@ -269,6 +284,7 @@ def validate_lng_lat(lng_raw, lat_raw):
 
 
 def validate_radius_meters(radius_raw, default=500, max_radius=5000):
+    """Valida e normalizza il raggio (metri) per query di prossimità."""
     if radius_raw is None or str(radius_raw).strip() == "":
         radius = default
     else:
@@ -286,6 +302,7 @@ def validate_radius_meters(radius_raw, default=500, max_radius=5000):
 
 
 def validate_limit(limit_raw, default=100, max_limit=1000):
+    """Valida e normalizza il limite massimo dei risultati."""
     if limit_raw is None or str(limit_raw).strip() == "":
         limit = default
     else:
@@ -303,6 +320,7 @@ def validate_limit(limit_raw, default=100, max_limit=1000):
 
 
 def validate_nil_name(nil_name):
+    """Valida l'input NIL lato route, consentendo caratteri realistici del dominio."""
     if nil_name is None:
         raise ValueError("Parametro NIL mancante")
 
@@ -321,6 +339,7 @@ def validate_nil_name(nil_name):
 
 
 def build_nil_regex(search_text):
+    """Costruisce un regex flessibile tra token NIL (spazi/trattini/punti/apostrofi)."""
     tokens = [re.escape(token) for token in search_text.split() if token]
     if not tokens:
         raise ValueError("Parametro NIL non valido")
@@ -329,6 +348,7 @@ def build_nil_regex(search_text):
 
 
 def build_near_query(field_name, lng, lat, radius_meters):
+    """Genera una query $near MongoDB per ricerche geospaziali entro raggio."""
     return {
         field_name: {
             "$near": {
@@ -343,6 +363,7 @@ def build_near_query(field_name, lng, lat, radius_meters):
 
 
 def list_fountains(limit=100, nil_filter=None):
+    """Elenca fontanelle, opzionalmente filtrate per NIL esatto case-insensitive."""
     collection = get_fountains_collection()
     query = {}
 
@@ -356,6 +377,7 @@ def list_fountains(limit=100, nil_filter=None):
 
 
 def get_fountains_by_nil(nil_name, limit=200):
+    """Ricerca fontanelle per NIL usando regex robusto e regex parziale."""
     collection = get_fountains_collection()
     normalized_nil_name = normalize_nil_value(nil_name) or nil_name
     nil_regex = build_nil_regex(normalized_nil_name)
@@ -378,6 +400,7 @@ def get_fountains_by_nil(nil_name, limit=200):
 
 
 def get_fountains_nearby(lng, lat, radius_meters=500, limit=100):
+    """Recupera fontanelle vicine al punto usando fallback su campi geospaziali alternativi."""
     collection = get_fountains_collection()
     last_error = None
 
@@ -402,6 +425,7 @@ def get_fountains_nearby(lng, lat, radius_meters=500, limit=100):
 
 
 def get_fountains_stats_by_nil():
+    """Calcola statistiche aggregate (conteggio fontanelle) per NIL."""
     collection = get_fountains_collection()
 
     pipeline = [
@@ -449,6 +473,7 @@ def get_fountains_stats_by_nil():
 
 
 def get_available_nil_list():
+    """Recupera elenco NIL preferendo collection NIL e con fallback su vedovelle."""
     nil_values = []
 
     # Tentativo primario: collezione NIL dedicata.
@@ -493,6 +518,7 @@ def get_available_nil_list():
 
 
 def extract_nil_name_from_doc(document):
+    """Estrae il nome NIL da documenti con schemi eterogenei."""
     if not isinstance(document, dict):
         return None
 
@@ -531,6 +557,7 @@ def extract_nil_name_from_doc(document):
 
 
 def extract_geometry_from_geojson_candidate(candidate):
+    """Estrae una geometria GeoJSON valida da un candidato (Geometry o Feature)."""
     if not isinstance(candidate, dict):
         return None
 
@@ -556,6 +583,7 @@ def extract_geometry_from_geojson_candidate(candidate):
 
 
 def extract_nil_geometry(document):
+    """Trova la geometria NIL in campi noti di diversi formati sorgente."""
     if not isinstance(document, dict):
         return None
 
@@ -573,6 +601,7 @@ def extract_nil_geometry(document):
 
 
 def iter_nil_feature_documents(nil_documents):
+    """Itera uniformemente documenti NIL, appiattendo eventuali FeatureCollection."""
     for document in nil_documents:
         if not isinstance(document, dict):
             continue
@@ -587,6 +616,7 @@ def iter_nil_feature_documents(nil_documents):
 
 
 def build_nil_counts_map(fountains_collection):
+    """Costruisce mappa {nil_normalizzato: count_fontanelle} via pipeline aggregata."""
     counts_pipeline = [
         {
             "$project": {
@@ -629,6 +659,7 @@ def build_nil_counts_map(fountains_collection):
 
 
 def get_choropleth_geojson():
+    """Genera la FeatureCollection choropleth completa di tutti i NIL."""
     fountains_collection = get_fountains_collection()
     nil_collection = get_nil_collection()
 
@@ -666,6 +697,7 @@ def get_choropleth_geojson():
 
 
 def get_choropleth_geojson_for_nil(nil_name):
+    """Restituisce solo la feature GeoJSON del NIL richiesto con match regex robusto."""
     fountains_collection = get_fountains_collection()
     nil_collection = get_nil_collection()
 
@@ -741,6 +773,7 @@ def get_choropleth_geojson_for_nil(nil_name):
 
 @app.errorhandler(HTTPException)
 def handle_http_error(error):
+    """Gestione errori HTTP noti con payload uniforme."""
     details = { 
         "code": error.code,
         "name": error.name,
@@ -751,16 +784,19 @@ def handle_http_error(error):
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(_error):
+    """Fallback per eccezioni inattese lato server."""
     return error_response(message="Errore interno del server", status_code=500, details={"code": 500})
 
 
 @app.get("/")
 def serve_home():
+    """Serve la pagina frontend principale."""
     return send_from_directory(app.static_folder, "index.html")
 
 
 @app.get("/api/health")
 def health_check():
+    """Endpoint di health-check per verificare disponibilità API."""
     payload = {
         "service": "fontanelle-milano-api",
         "status": "ok",
@@ -771,6 +807,7 @@ def health_check():
 
 @app.get("/api/fontanelle")
 def fountains_list_route():
+    """Route elenco fontanelle con supporto filtro NIL e limite risultati."""
     try:
         limit = validate_limit(request.args.get("limit"), default=100)
         nil_filter = request.args.get("nil")
@@ -793,6 +830,7 @@ def fountains_list_route():
 
 @app.get("/api/fontanelle/nil/<nil_name>")
 def fountains_by_nil_route(nil_name):
+    """Route ricerca fontanelle per NIL (input utente da testo/dropdown)."""
     try:
         normalized_nil_name = validate_nil_name(nil_name)
         limit = validate_limit(request.args.get("limit"), default=200)
@@ -819,6 +857,7 @@ def fountains_by_nil_route(nil_name):
 
 @app.get("/api/fontanelle/vicine")
 def fountains_nearby_route():
+    """Route ricerca fontanelle entro raggio da coordinate utente."""
     try:
         lng, lat = validate_lng_lat(request.args.get("lng"), request.args.get("lat"))
         radius = validate_radius_meters(request.args.get("radius"), default=500)
@@ -847,6 +886,7 @@ def fountains_nearby_route():
 
 @app.get("/api/fontanelle/stats/nil")
 def fountains_stats_by_nil_route():
+    """Route statistiche aggregate fontanelle per NIL."""
     try:
         items = get_fountains_stats_by_nil()
         return success_response(
@@ -864,6 +904,7 @@ def fountains_stats_by_nil_route():
 
 @app.get("/api/fontanelle/choropleth")
 def fountains_choropleth_route():
+    """Route choropleth globale: tutte le geometrie NIL con relativo conteggio."""
     try:
         geojson = get_choropleth_geojson()
         return success_response(
@@ -881,6 +922,7 @@ def fountains_choropleth_route():
 
 @app.get("/api/fontanelle/choropleth/nil/<nil_name>")
 def fountains_choropleth_single_nil_route(nil_name):
+    """Route choropleth singolo NIL: una sola feature per la ricerca NIL."""
     try:
         normalized_nil_name = validate_nil_name(nil_name)
         geojson = get_choropleth_geojson_for_nil(normalized_nil_name)
@@ -910,6 +952,7 @@ def fountains_choropleth_single_nil_route(nil_name):
 
 @app.get("/api/nil")
 def nil_list_route():
+    """Route elenco NIL disponibili per compilare UI (es. dropdown)."""
     try:
         items = get_available_nil_list()
         return success_response(
